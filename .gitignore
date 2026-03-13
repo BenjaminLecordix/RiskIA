@@ -1,0 +1,25 @@
+# OS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# Training artifacts (large)
+codes/risk_game/models/**
+codes/risk_game/logs/**
+codes/risk_game/eval_reports/**
+
+# Allow placeholders
+!codes/risk_game/models/.gitkeep
+!codes/risk_game/logs/.gitkeep
+!codes/risk_game/eval_reports/.gitkeep
