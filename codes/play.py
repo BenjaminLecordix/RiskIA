@@ -1,34 +1,51 @@
+import os
+import time
+
 from sb3_contrib import MaskablePPO
 from sb3_contrib.common.wrappers import ActionMasker
 from risk_game.gym_env import RiskGymEnv
-import time
 
 def mask_fn(env):
     return env.action_masks()
 
-def watch_game(model_name):
+def watch_game(model_name, visualize=True, event_delay=0.5):
     # 1. Charger l'environnement
-    env = RiskGymEnv()
-    env = ActionMasker(env, mask_fn)
+    base_env = RiskGymEnv()
+    env = ActionMasker(base_env, mask_fn)
 
     # 2. Charger le modèle entraîné
-    model_path = "risk_game/models/PPO/" + model_name
+    base_dir = os.path.dirname(__file__)
+    model_path = os.path.join(base_dir, "risk_game", "models", "PPO", model_name)
     #print(f"Chargement du modèle depuis {model_path}...")
     
     try:
         model = MaskablePPO.load(model_path)
     except FileNotFoundError:
-        #print("Erreur : Le modèle n'existe pas. Lance train.py d'abord !")
+        print(f"Erreur : modèle introuvable: {model_path}")
         return
+
+    visualizer = None
+    if visualize:
+        from risk_game.visualizer import RiskVisualizer
+
+        visualizer = RiskVisualizer(
+            base_env.engine,
+            update_on_event=True,
+            event_delay=event_delay,
+        )
 
     # 3. Lancer une partie
     obs, _ = env.reset()
+    if visualizer:
+        visualizer.render()
     done = False
     turn = 0
     
     #print("\n=== DÉBUT DU MATCH DE DÉMONSTRATION ===")
     
     while not done:
+        if visualizer and visualizer.is_closed():
+            break
         # L'IA prédit la meilleure action en tenant compte des masques
         # action_masks=env.env.action_masks() est nécessaire pour la prédiction
         action_masks = env.action_masks()
@@ -48,11 +65,14 @@ def watch_game(model_name):
         turn += 1
         
         # Ralentir pour pouvoir lire ce qui se passe
-        time.sleep(0) 
+        if visualizer:
+            if not visualizer.render():
+                break
+        time.sleep(0)
 
     #print("\n=== PARTIE TERMINÉE ===")
     winner = "IA (Agent 0)" if reward > 0 else "NaiveBot (Agent 1)"
     #print(f"Vainqueur : {winner}")
 
 if __name__ == "__main__":
-    watch_game("risk_v10_ckpt_74008321_steps") 
+    watch_game("risk_v11_best") 

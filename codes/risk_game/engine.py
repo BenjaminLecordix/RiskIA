@@ -13,6 +13,9 @@ class RiskEngine:
         self.players = self._create_players(num_players)
         self.current_player_index = 0
         self.phase = "SETUP" 
+        self._listeners = []
+        self._event_log = []
+        self._max_event_log = 200
         self.reset()
 
     def _create_players(self, n):
@@ -63,7 +66,31 @@ class RiskEngine:
 
         self.phase = "REINFORCE"
         self.current_player_index = 0
+        self._emit("reset")
         #print("Game Reset and Initialized.")
+
+    def add_listener(self, listener):
+        if listener not in self._listeners:
+            self._listeners.append(listener)
+
+    def remove_listener(self, listener):
+        if listener in self._listeners:
+            self._listeners.remove(listener)
+
+    def _emit(self, event_type, **payload):
+        event = {"type": event_type, **payload}
+        self._event_log.append(event)
+        if len(self._event_log) > self._max_event_log:
+            self._event_log.pop(0)
+        for listener in list(self._listeners):
+            try:
+                listener(event)
+            except Exception:
+                # Ne jamais casser l'engine si un listener plante.
+                pass
+
+    def get_event_log(self):
+        return list(self._event_log)
 
     def get_state_summary(self):
         """Helper pour visualiser l'état actuel"""
@@ -169,6 +196,13 @@ class RiskEngine:
             for i in sorted_indices:
                 player.cards.pop(i)
                 
+            self._emit(
+                "trade",
+                player_id=player_id,
+                reward=reward,
+                cards=selected_cards,
+                armies_pool=player.armies_pool,
+            )
             #print(f"Player {player_id} traded cards for {reward} armies.") # Debug
             return reward
         else:
@@ -272,6 +306,13 @@ class RiskEngine:
 
         card_income = self.auto_trade_cards(player.id)
         
+        self._emit(
+            "start_turn",
+            player_id=player.id,
+            income=income,
+            card_income=card_income,
+            armies_pool=player.armies_pool,
+        )
         #print(f"Renforts reçus : {income} (Total pool: {player.armies_pool})")
         
     def place_armies(self, player_id, territory_name, amount=1):
@@ -297,6 +338,14 @@ class RiskEngine:
         # Application
         territory.armies += amount
         player.armies_pool -= amount
+        self._emit(
+            "place",
+            player_id=player_id,
+            territory=territory_name,
+            amount=amount,
+            armies=territory.armies,
+            armies_pool=player.armies_pool,
+        )
         #print(f"Player {player_id} placed {amount} armies on {territory_name}. (Pool left: {player.armies_pool})")
         
         # Si le pool est vide, on peut passer à la phase d'attaque (ou rester là, selon l'implémentation RL)
@@ -375,12 +424,43 @@ class RiskEngine:
         if target.armies <= 0:
             # --- VICTOIRE ---
             #print(f"Joueur {player_id} a conquis {target.name} à {old_owner_id} depuis {source.name}! Troupes initiales : {nb_initial_attacker} attaquant, {nb_initial_defender} défenseur. Troupes finales : {source.armies} attaquant, 0 défenseur.")
-            return self._handle_victory(player_id, source, target, old_owner_id)
+            attacker_remaining = source.armies
+            defender_remaining = target.armies
+            success = self._handle_victory(player_id, source, target, old_owner_id)
+            self._emit(
+                "attack",
+                player_id=player_id,
+                source=source_name,
+                target=target_name,
+                success=True,
+                attacker_losses=nb_initial_attacker - attacker_remaining,
+                defender_losses=nb_initial_defender - max(defender_remaining, 0),
+                attacker_remaining=attacker_remaining,
+                defender_remaining=defender_remaining,
+                source_armies=source.armies,
+                target_armies=target.armies,
+                target_owner=target.owner,
+            )
+            return success
         else:
             # --- DÉFAITE / ÉPUISEMENT ---
             # L'attaquant n'a plus que 1 armée, il ne peut plus continuer.
             # Le défenseur a conservé le territoire.
             #print(f"Joueur {player_id} a échoué à conquérir {target.name} à {old_owner_id} depuis {source.name}. Troupes initiales : {nb_initial_attacker} attaquant, {nb_initial_defender} défenseur. Troupes finales : {source.armies} attaquant, {target.armies} défenseur.")
+            self._emit(
+                "attack",
+                player_id=player_id,
+                source=source_name,
+                target=target_name,
+                success=False,
+                attacker_losses=nb_initial_attacker - source.armies,
+                defender_losses=nb_initial_defender - target.armies,
+                attacker_remaining=source.armies,
+                defender_remaining=target.armies,
+                source_armies=source.armies,
+                target_armies=target.armies,
+                target_owner=target.owner,
+            )
             return False
 
     def _handle_victory(self, player_id, source, target, old_owner_id):
@@ -412,6 +492,7 @@ class RiskEngine:
             if eliminated_player.is_alive:
                 #print(f"--- JOUEUR {eliminated_player.name} A ÉTÉ ÉLIMINÉ ! ---")
                 eliminated_player.is_alive = False
+                self._emit("elimination", player_id=player_id)
                 # Note: Dans le Risk complet, on récupère les cartes ici.
                 # Pour l'instant on laisse simple.
 
@@ -483,7 +564,18 @@ class RiskEngine:
             # 3. Application du mouvement
             source.armies -= count
             target.armies += count
+            self._emit(
+                "fortify",
+                player_id=player_id,
+                source=source_name,
+                target=target_name,
+                count=count,
+                source_armies=source.armies,
+                target_armies=target.armies,
+            )
             #print(f"Fortification : {count} armées déplacées de {source_name} vers {target_name}.")
+        if count == 0:
+            self._emit("fortify_pass", player_id=player_id)
         
         # --- FIN DE TOUR (COMMUN AUX DEUX CAS) ---
         
